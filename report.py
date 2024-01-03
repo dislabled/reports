@@ -50,7 +50,7 @@ class DataParser:
             # Check if the line ends with AM or PM
             if line.endswith(("AM", "PM")):
                 # Merge the current line with the next line
-                line += ' ' + lines.pop(i + 1).strip()
+                line += " " + lines.pop(i + 1).strip()
             cleaned_lines.append(line)
             i += 1
 
@@ -67,11 +67,11 @@ class DataParser:
 
         # Extract the datetime string and AM/PM separately
         datetime_str = df.iloc[:, 0]
-        am_pm = datetime_str.str.extract(r'(\b(?:AM|PM)\b)', expand=False)
-        datetime_str = datetime_str.str.replace(r'\b(?:AM|PM)\b', '', regex=True).str.strip()
+        am_pm = datetime_str.str.extract(r"(\b(?:AM|PM)\b)", expand=False)
+        datetime_str = datetime_str.str.replace(r"\b(?:AM|PM)\b", "", regex=True).str.strip()
 
         # Combine date and time and convert to datetime
-        datetime_combined = pd.to_datetime(datetime_str + ' ' + am_pm, format="%m/%d/%Y %I:%M:%S %p")
+        datetime_combined = pd.to_datetime(datetime_str + " " + am_pm, format="%m/%d/%Y %I:%M:%S %p")
 
         # Update the first column with the merged datetime
         df.iloc[:, 0] = datetime_combined
@@ -89,7 +89,7 @@ class DataManipulator:
 
     def estimate_threshold_reach_time(
         self, sensor_name: str, threshold: float, lookahead_minutes: int = 60
-    ) -> pd.Timestamp|None:
+    ) -> pd.Timestamp | None:
         """
         Estimate the time when a sensor might reach a specified threshold.
 
@@ -106,14 +106,13 @@ class DataManipulator:
 
         # Get the starting index of the data
         starting_point = self.get_starting_point(sensor_name)
-        
+
         if starting_point is None:
             return None
 
         # Get the "Time" column as a pandas Series
-        time_column = self.data['Time']
+        time_column = self.data["Time"]
         starting_time = time_column.loc[starting_point]
-
 
         # Calculate the average rate of change over the last 'lookahead_minutes' minutes
         recent_data = sensor_data.loc[starting_point:]
@@ -130,7 +129,7 @@ class DataManipulator:
 
         return estimated_time
 
-    def get_starting_point(self, sensor_name: str) -> pd.Index|None:
+    def get_starting_point(self, sensor_name: str) -> pd.Index | None:
         """Get the starting point of the data."""
         indices_max = argrelmax(self.data[sensor_name].values, order=5)[0]
 
@@ -175,7 +174,7 @@ class DataManipulator:
         slope = (estimated_threshold_value - last_value) / minutes_to_threshold_scalar
 
         # Create a new column with the calculated slope values
-        self.data['Slope'] = pd.Series([slope] * len(self.data), index=self.data.index)
+        self.data["Slope"] = pd.Series([slope] * len(self.data), index=self.data.index)
 
 
 class Plotter:
@@ -183,7 +182,13 @@ class Plotter:
         """Initialize the class."""
         self.data = data
 
-    def gen_plot(self, sensor_name: str, threshold_low: int | None = None, threshold_high: int | None = None, from_starting_point: bool = False) -> None:
+    def gen_plot(
+        self,
+        sensor_name: str,
+        threshold_low: int | None = None,
+        threshold_high: int | None = None,
+        from_starting_point: bool = False,
+    ) -> None:
         """
         Generate a plot for a specified sensor's data against time.
 
@@ -203,7 +208,7 @@ class Plotter:
         if from_starting_point:
             manipulator = DataManipulator(self.data)
             start_index = manipulator.get_starting_point(sensor_name)
-            start_index = str(np.datetime_as_string(manipulator.data.loc[start_index]['Time'])[0])
+            start_index = str(np.datetime_as_string(manipulator.data.loc[start_index]["Time"])[0])
 
         # Convert index to datetime for time representation.
         self.data.set_index(time_tuple, inplace=True)
