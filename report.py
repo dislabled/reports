@@ -1,148 +1,135 @@
 #!/usr/bin/env python3
 # -*- coding=utf-8 -*-
+"""
+A module for manipulating and visualizing sensor data.
+
+This module includes classes for data manipulation (DataManipulator) and plotting (Plotter)
+based on Pandas DataFrame containing sensor data.
+
+Classes:
+    - DataManipulator: Performs data manipulation tasks like estimating threshold reach time, computing slope, etc.
+    - Plotter: Generates plots for specified sensor data against time.
+
+Usage:
+    1. Create an instance of DataParser from the 'dataparser' module to parse sensor data from a file.
+    2. Pass the parsed data to DataManipulator or Plotter to perform data manipulations or generate plots, respectively.
+
+Example:
+    from dataparser import DataParser
+    from datamanipulator import DataManipulator
+    from plotter import Plotter
+    from pathlib import Path
+
+    # Parse the sensor data from a file using DataParser
+    parser = DataParser(Path("sensor_data.tsv"))
+    parsed_data = parser.parse_file()
+
+    # Perform data manipulations using DataManipulator
+    manipulator = DataManipulator(parsed_data)
+    starting_point = manipulator.get_starting_point("sensor_name")
+    estimated_time = manipulator.estimate_threshold_reach_time("sensor_name", 10, 60, starting_point)
+
+    # Generate plots using Plotter
+    plotter = Plotter(parsed_data)
+    plotter.gen_plot("sensor_name", threshold_low=20, threshold_high=60, from_starting_point=True)
+
+Author: Stian Knudsen
+Date: 2024-01-05
+"""
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.signal import argrelmax
-
-
-class DataParser:
-    def __init__(self, filename: Path) -> None:
-        """Initialize the class."""
-        self.filename = filename
-
-    def parse_file(self) -> pd.DataFrame:
-        """
-        Parse the input file and format the data.
-
-        Args:
-            filename (Path): Path to the file to be parsed.
-
-        Returns:
-            pd.DataFrame: Parsed data in a formatted DataFrame.
-        """
-        # Open the input file in read mode.
-        with open(self.filename, "r") as file:
-            # Read the file and store its contents in a list.
-            lines = file.readlines()
-
-        # Remove newlines.
-        while "\n" in lines:
-            lines.remove("\n")
-
-        # Remove header and footer.
-        lines = lines[3:-4]
-
-        # Remove all instances of ":av".
-        lines = [line.replace(":av", "") for line in lines]
-
-        # Fix missing headers.
-        lines[1] = "Time of sensors\t" + lines[1]
-        lines[2] = "localtime\t" + lines[2]
-
-        # Merge lines that have AM/PM separated, Valmet generation bug.
-        cleaned_lines = []
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            # Check if the line ends with AM or PM
-            if line.endswith(("AM", "PM")):
-                # Merge the current line with the next line
-                line += " " + lines.pop(i + 1).strip()
-            cleaned_lines.append(line)
-            i += 1
-
-        # Split on tabs and remove newlines.
-        return_list = [line.strip().split("\t") for line in cleaned_lines]
-
-        # Make tuples for the header
-        column_tuples = list(zip(return_list[0], return_list[1], return_list[2]))
-
-        # Make the DataFrame
-        df = pd.DataFrame(return_list[3:])
-        # Set the header with the tuples
-        df.columns = pd.MultiIndex.from_tuples(column_tuples)
-
-        # Extract the datetime string and AM/PM separately
-        datetime_str = df.iloc[:, 0]
-        am_pm = datetime_str.str.extract(r"(\b(?:AM|PM)\b)", expand=False)
-        datetime_str = datetime_str.str.replace(r"\b(?:AM|PM)\b", "", regex=True).str.strip()
-
-        # Combine date and time and convert to datetime
-        datetime_combined = pd.to_datetime(datetime_str + " " + am_pm, format="%m/%d/%Y %I:%M:%S %p")
-
-        # Update the first column with the merged datetime
-        df.iloc[:, 0] = datetime_combined
-
-        # Change the datatypes of the columns
-        df[column_tuples[1:]] = df[column_tuples[1:]].astype(float)
-
-        return pd.DataFrame(df)
+from dataparser import DataParser
 
 
 class DataManipulator:
+    """
+    Initialize DataManipulator with the input DataFrame.
+
+    Args:
+        data (pd.DataFrame): Input DataFrame containing sensor data.
+    """
+
     def __init__(self, data: pd.DataFrame):
         """Initialize the class."""
         self.data = data
 
+    def get_resolution(self) -> pd.Timedelta:
+        """Get the resolution of the data."""
+        return self.data.index[1] - self.data.index[0]
+
     def estimate_threshold_reach_time(
-        self, sensor_name: str, threshold: float, lookahead_minutes: int = 60
+        self,
+        sensor_name: str,
+        threshold: float,
+        lookahead_minutes: int | pd.Timedelta = 60,
+        starting_point: pd.DatetimeIndex | None = None,
     ) -> pd.Timestamp | None:
         """
         Estimate the time when a sensor might reach a specified threshold.
 
         Args:
-            sensor_name (str): Name of the sensor.
             threshold (float): Threshold value.
             lookahead_minutes (int): Lookahead time in minutes for estimation (default: 60).
 
         Returns:
             pd.Timestamp: Estimated timestamp when the threshold might be reached.
         """
-        # Get the sensor data column
+        # Get the sensor data column.
         sensor_data = self.data[sensor_name]
 
-        # Get the starting index of the data
-        starting_point = self.get_starting_point(sensor_name)
-
         if starting_point is None:
-            return None
+            # Use the first timestamp as the starting point.
+            starting_point = pd.to_datetime(self.data.index[0])
 
-        # Get the "Time" column as a pandas Series
-        time_column = self.data["Time"]
-        starting_time = time_column.loc[starting_point]
+        print(starting_point)
+        # Check if there is enough data to estimate the threshold reach time.
+        lookahead_minutes = pd.to_timedelta(lookahead_minutes, unit="minutes")
+        entries = int(-abs(lookahead_minutes / self.get_resolution()))
+        if self.data.index[entries] < starting_point:
+            raise ValueError("Not enough data to estimate the threshold reach time.")
 
-        # Calculate the average rate of change over the last 'lookahead_minutes' minutes
+        # Calculate the average rate of change over the last 'lookahead_minutes' minutes.
         recent_data = sensor_data.loc[starting_point:]
-        average_change_rate = (recent_data.iloc[-1] - recent_data.iloc[0]) / lookahead_minutes
+        average_change_rate = (recent_data.iloc[-1] - recent_data.iloc[0]) / (lookahead_minutes.total_seconds() / 60)
 
-        # Estimate the number of minutes until the threshold might be reached based on the average rate of change
+        # Estimate the number of minutes until the threshold might be reached based on the average rate of change.
         minutes_to_threshold = (threshold - recent_data.iloc[-1]) / average_change_rate
 
-        # Extract the scalar value from the Series
+        # Extract the scalar value from the Series.
         minutes_to_threshold_scalar = minutes_to_threshold.iloc[0]
 
-        # Add the estimated minutes to the last timestamp in the data to get the estimated time
-        estimated_time = starting_time + pd.Timedelta(minutes=minutes_to_threshold_scalar)
+        # Add the estimated minutes to the last timestamp in the data to get the estimated time.
+        delta = pd.Timedelta(minutes=minutes_to_threshold_scalar)
+        if isinstance(delta, pd.Timedelta):
+            return starting_point + delta
+        return None
 
-        return estimated_time
+    def get_starting_point(self, sensor_name: str) -> pd.Timestamp | None:
+        """
+        Get the starting point (last local maximum) timestamp in the data.
 
-    def get_starting_point(self, sensor_name: str) -> pd.Index | None:
-        """Get the starting point of the data."""
+        Args:
+            sensor_name (str): Name of the sensor.
+
+        Returns:
+            pd.Timestamp | None: Timestamp of the last local maximum in the sensor's data or None if not found.
+        """
         indices_max = argrelmax(self.data[sensor_name].values, order=5)[0]
 
         if len(indices_max) > 0:
             # Get the index of the last peak
-            return indices_max[-1]
-        else:
-            return None
+            starting_point = self.data.index[indices_max[-1]]
+            if isinstance(starting_point, pd.Timestamp):
+                return starting_point
+        return None
 
-    def add_slope_column(self, sensor_name: str, threshold: float, lookahead_minutes: int = 60) -> None:
+    def compute_slope_to_threshold(self, sensor_name: str, threshold: float, lookahead_minutes: int = 60) -> None:
         """
-        Calculate the slope between the last recorded value and the estimated threshold reach,
-        and add the slope values as a new column in the DataFrame.
+        Compute the slope to a specified threshold and append estimated values to the DataFrame.
 
         Args:
             sensor_name (str): Name of the sensor.
@@ -152,32 +139,54 @@ class DataManipulator:
         Returns:
             None
         """
-        recent_data = self.data[sensor_name].tail(lookahead_minutes)
+        # Get the sensor data column.
+        sensor_data = self.data[sensor_name]
 
-        # Calculate the average rate of change over the last 'lookahead_minutes' minutes
+        # Get the starting index of the data.
+        starting_point = self.get_starting_point(sensor_name)
+
+        if starting_point is None:
+            return None  # Return None if there's no valid starting point.
+
+        # Calculate average change rate over the last 'lookahead_minutes' minutes.
+        recent_data = sensor_data.loc[starting_point:]
         average_change_rate = (recent_data.iloc[-1] - recent_data.iloc[0]) / lookahead_minutes
+        print(average_change_rate)
 
-        # Estimate the number of minutes until the threshold might be reached based on the average rate of change
-        minutes_to_threshold = (threshold - recent_data.iloc[-1]) / average_change_rate
+        # Estimate the number of data points until the threshold might be reached.
+        if average_change_rate != 0:
+            data_points_to_threshold = (threshold - recent_data.iloc[-1]) / average_change_rate
+        else:
+            data_points_to_threshold = np.nan
 
-        # Extract the scalar value from the Series
-        minutes_to_threshold_scalar = minutes_to_threshold.iloc[0]
+        # Calculate the time difference between each data point.
+        time_diff = (recent_data.index[-1] - recent_data.index[-2]).total_seconds() / 60
 
-        # Find the estimated timestamp when the threshold might be reached
-        estimated_time = self.data.index[-1] + pd.Timedelta(minutes=minutes_to_threshold_scalar)
+        # Create new timestamps based on the time difference and the number of data points.
+        new_time_indices = recent_data.index[-1] + pd.to_timedelta(
+            np.arange(1, data_points_to_threshold + 1) * time_diff, unit="m"
+        )
 
-        # Get the values for the estimated timestamp and the last recorded timestamp
-        last_value = self.data[sensor_name].iloc[-1]
-        estimated_threshold_value = self.data[sensor_name].loc[estimated_time]
+        # Create new sensor values based on the slope and timestamps.
+        new_sensor_values = recent_data.iloc[-1] + average_change_rate * np.arange(1, data_points_to_threshold + 1)
 
-        # Calculate the slope between the last recorded value and the estimated threshold reach
-        slope = (estimated_threshold_value - last_value) / minutes_to_threshold_scalar
+        # Create new DataFrame with the additional data.
+        new_data = pd.DataFrame({"Time": new_time_indices, sensor_name: new_sensor_values})
 
-        # Create a new column with the calculated slope values
-        self.data["Slope"] = pd.Series([slope] * len(self.data), index=self.data.index)
+        # Append new data to the existing DataFrame.
+        self.data = pd.concat([self.data, new_data], ignore_index=True)
+
+        return new_time_indices[-1]  # Return the estimated time of reaching the threshold.
 
 
 class Plotter:
+    """
+    A class to generate plots for specified sensor data against time.
+
+    Args:
+        data (pd.DataFrame): Input DataFrame containing sensor data.
+    """
+
     def __init__(self, data: pd.DataFrame):
         """Initialize the class."""
         self.data = data
@@ -201,17 +210,11 @@ class Plotter:
         Returns:
             None
         """
-        # Get the Time header tuple, and the starting point before index changes.
-        time_tuple = self.data.columns[self.data.columns.get_level_values(0) == "Time"][0]
-
         start_index = None
+        # Check if index is all or from starting_point.
         if from_starting_point:
             manipulator = DataManipulator(self.data)
             start_index = manipulator.get_starting_point(sensor_name)
-            start_index = str(np.datetime_as_string(manipulator.data.loc[start_index]["Time"])[0])
-
-        # Convert index to datetime for time representation.
-        self.data.set_index(time_tuple, inplace=True)
 
         if start_index is None:
             plot_data = self.data[sensor_name]
@@ -224,6 +227,7 @@ class Plotter:
 
         # Modifying the y-axis ticks to append the unit.
         ticks = ax.get_yticks()
+        ax.set_yticks(ticks, minor=True)
         ax.set_yticklabels([f"{tick} {unit}" for tick in ticks])
 
         # Formatting the plot.
@@ -245,7 +249,11 @@ if __name__ == "__main__":
     parser = DataParser(Path("levels_big.tsv"))
     parsed_data = parser.parse_file()
     manipulator = DataManipulator(parsed_data)
-    manipulator.add_slope_column("2HTJ10CW001", 10, 3600)
+    # print(manipulator.get_starting_point("2HTJ10CW001"))
+    start_time = manipulator.get_starting_point("2HTJ10CW001")
+    # print(manipulator.estimate_threshold_reach_time("2HTJ10CW001", 10, 60, start_time))
+    # manipulator.compute_slope_to_threshold("2HTJ10CW001", 10, 10)
 
     plotter = Plotter(parsed_data)
-    plotter.gen_plot("2HTJ10CW001", threshold_low=20, threshold_high=60, from_starting_point=True)
+    # plotter.gen_plot("2HTJ10CW001", threshold_low=20, threshold_high=60, from_starting_point=False)
+    # plotter.gen_plot("2HTJ10CW001", threshold_low=20, threshold_high=60, from_starting_point=True)
