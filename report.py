@@ -85,7 +85,6 @@ class DataManipulator:
             # Use the first timestamp as the starting point.
             starting_point = pd.to_datetime(self.data.index[0])
 
-        print(starting_point)
         # Check if there is enough data to estimate the threshold reach time.
         lookahead_minutes = pd.to_timedelta(lookahead_minutes, unit="minutes")
         entries = int(-abs(lookahead_minutes / self.get_resolution()))
@@ -94,7 +93,10 @@ class DataManipulator:
 
         # Calculate the average rate of change over the last 'lookahead_minutes' minutes.
         recent_data = sensor_data.loc[starting_point:]
-        average_change_rate = (recent_data.iloc[-1] - recent_data.iloc[0]) / (lookahead_minutes.total_seconds() / 60)
+        lookahead_timestamp = recent_data.index[0] + lookahead_minutes
+        average_change_rate = (recent_data.loc[lookahead_timestamp] - recent_data.iloc[0]) / (
+            lookahead_minutes.total_seconds() / 60
+        )
 
         # Estimate the number of minutes until the threshold might be reached based on the average rate of change.
         minutes_to_threshold = (threshold - recent_data.iloc[-1]) / average_change_rate
@@ -151,7 +153,6 @@ class DataManipulator:
         # Calculate average change rate over the last 'lookahead_minutes' minutes.
         recent_data = sensor_data.loc[starting_point:]
         average_change_rate = (recent_data.iloc[-1] - recent_data.iloc[0]) / lookahead_minutes
-        print(average_change_rate)
 
         # Estimate the number of data points until the threshold might be reached.
         if average_change_rate != 0:
